@@ -1,0 +1,180 @@
+<?php
+// $Id$
+
+/**
+ * @file
+ * User Warn module file
+ *
+ * This module allows site administrators to send a stock warning email
+ * to a specified user or users through the admin interface. Administrators
+ * can modify the default email including tokenization.
+ */
+
+define('USER_WARN_MAIL_SUBJECT', 'Administrative Warning');
+define('USER_WARN_MAIL_TEXT',
+'Hello [user:name],
+
+We have been notified that you have posted comments on [site:name] that are
+in violation of our terms of service.  If this behavior continues your account will be suspended. 
+
+You can review our terms of service at [site:tos-url].
+
+Sincerely,
+[site:name]
+[site:mail]');
+
+/**
+ * Implement hook_help().
+ */
+function user_warn_help($path, $arg) {
+  if ($path == 'admin/help#user_warn') {
+    return t('User Warn allows site adminitrators to send a standard email to site users to notify them of improper behavior.');
+  }
+}
+
+/**
+ * Implement hook_menu().
+ */
+function user_warn_menu() {
+  $items = array();
+
+  $items['admin/config/people/user_warn'] = array(
+    'title' => 'User Warn',
+    'description' => 'Configuration for the User Warn module.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('user_warn_form'),
+    'access arguments' => array('administer users'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['user/%/warn'] = array(
+    'title' => 'Warn',
+    'description' => 'Send email to a user about improper site behavior.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('user_warn_confirm_form', 1),
+    'access arguments' => array('administer users'),
+    'type' => MENU_LOCAL_TASK,
+  );
+
+  return $items;
+}
+
+/**
+ * Form builder; Create and display the User Warn configuration settings form.
+ */
+function user_warn_form($form, &$form_state) {
+  $available_tokens = 'Available variables are: ';
+  $tokens = token_info();
+  foreach ($tokens['tokens']['site'] as $key => $value) {
+    $site_tokens[] = '[site:' . $key .']';
+  }
+
+  foreach ($tokens['tokens']['user'] as $key => $value) {
+    $site_tokens[] = '[user:' . $key .']';
+  }
+  $available_tokens .= implode(', ', $site_tokens);
+
+  // Text field for the email subject.
+  $form['user_warn_email_subject'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('user_warn_email_subject', USER_WARN_MAIL_SUBJECT),
+    '#title' => t('Warning email subject'),
+    '#size' => 40,
+    '#maxlength' => 120,
+    '#required' => TRUE,
+    '#description' => t('The subject of the email which will be sent to users.'),
+  );
+  
+  // Textarea for the body of the email.
+  $form['user_warn_email_text'] = array(
+    '#type' => 'textarea',
+    '#rows' => 10,
+    '#columns' => 40,
+    '#default_value' => variable_get('user_warn_email_text', USER_WARN_MAIL_TEXT),
+    '#title' => t('Warning email text'),
+    '#required' => TRUE,
+    '#description' => t('The text of the email which will be sent to users. ') . $available_tokens,
+  );
+  
+  // Text field for the URL to our terms of service.
+  $form['user_warn_tos_url'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('user_warn_tos_url', ''),
+    '#title' => t('Terms of Service URL'),
+    '#description' => t('URL to this site\'s Terms of Service.'),
+  );
+  
+  // Checkbox to indicate whether admin should be BCC'd on emails.
+  $form['user_warn_bcc'] = array(
+    '#type' => 'checkbox',
+    '#default_value' => variable_get('user_warn_bcc', FALSE),
+    '#title' => t('BCC admin on all emails'),
+    '#description' => t('Indicates whether the admin user (as set in site configuration) should be BCC\'d on all warning emails.'),
+  );
+    
+  return system_settings_form($form);
+}
+
+/**
+ * Form submit handler. Save configuration settings for User Warn module.
+ */
+function user_warn_form_submit($form, &$form_state) {
+  variable_set('user_warn_email_subject', $form_state['values']['user_warn_email_subject']);
+  variable_set('user_warn_email_text', $form_state['values']['user_warn_email_text']);
+  variable_set('user_warn_bcc', $form_state['values']['user_warn_bcc']);
+  
+  drupal_set_message('The settings have been saved');
+}
+
+function user_warn_confirm_form($form, &$form_state, $uid) {
+  $form['account'] = array(
+    '#type' => 'value',
+    '#value' => user_load($uid),
+  );
+  
+  return confirm_form(
+    $form, 
+    t('Are you sure you want to send a warning email to this user?'), 
+    'user/' . $uid, 
+    t('This action can not be undone.'), 
+    t('Send email'), 
+    t('Cancel')
+  );
+}
+
+function user_warn_confirm_form_submit($form, &$form_state) {
+  $form_values = $form_state['values'];
+  $account = $form_values['account'];
+
+  drupal_mail(
+    'user_warn', 
+    'warn', 
+    $account->mail, 
+    user_preferred_language($account),
+    $form_values,
+    variable_get('site_mail', NULL),
+    TRUE
+  );
+}
+
+/**
+ * Implement hook_mail().
+ */
+function user_warn_mail($key, &$message, $params) {
+  switch ($key) {
+    case 'warn':
+      $account = $params['account'];
+      $subject = variable_get('user_warn_email_subject', USER_WARN_MAIL_SUBJECT);
+      $body = variable_get('user_warn_email_text', USER_WARN_MAIL_TEXT);
+
+      if (variable_get('user_warn_bcc', FALSE)) {
+        $admin_mail = variable_get('site_mail', NULL);
+        $message['headers']['bcc'] = $admin_mail;
+      }
+
+      $message['to'] = $account->mail;
+      $message['subject'] = $subject;
+      $message['body'][] = token_replace($body, array('user' => $account));
+      break;
+  }
+}
